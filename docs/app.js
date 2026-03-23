@@ -12,6 +12,47 @@ function logLine(kind, data) {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
+function formatConsoleArgs(args) {
+  return args.map((value) => {
+    if (typeof value === 'string') return value;
+    if (value instanceof Error) {
+      return value.stack || `${value.name}: ${value.message}`;
+    }
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch (_) {
+      return String(value);
+    }
+  }).join(' ');
+}
+
+function installConsoleMirror() {
+  const methods = ['log', 'info', 'warn', 'error', 'debug'];
+  for (const method of methods) {
+    const original = console[method].bind(console);
+    console[method] = (...args) => {
+      original(...args);
+      try {
+        logLine(`console-${method}`, formatConsoleArgs(args));
+      } catch (_) {
+        original('Failed to mirror console output into page log');
+      }
+    };
+  }
+
+  window.addEventListener('error', (event) => {
+    const detail = event.error?.stack || event.message || 'Unknown window error';
+    logLine('window-error', detail);
+  });
+
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason instanceof Error
+      ? (event.reason.stack || `${event.reason.name}: ${event.reason.message}`)
+      : formatConsoleArgs([event.reason]);
+    logLine('unhandledrejection', reason);
+  });
+}
+
 function setStatus(type, text) {
   statusDot.className = 'dot ' + (type || '');
   statusText.textContent = text;
@@ -492,6 +533,7 @@ $('loadWorkflowExampleBtn').addEventListener('click', () => {
 $('clearLogBtn').addEventListener('click', () => { logEl.textContent = ''; });
 
 (() => {
+  installConsoleMirror();
   const savedIp = localStorage.getItem('webos-last-ip') || '';
   const pageIsHttps = window.location.protocol === 'https:';
   if (pageIsHttps) $('port').value = '3001';
