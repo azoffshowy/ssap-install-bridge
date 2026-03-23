@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>webOS SSAP Install Bridge</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="app">
+    <section id="fileProtocolNotice" class="card" hidden>
+      <h2>Local File Mode Is Blocked by the Browser</h2>
+      <p class="muted">
+        This app uses a JavaScript module (<code>app.js</code>). Modern browsers do not load modules from
+        <code>file://</code> pages. Start a small local web server and open the app via
+        <code>http://localhost:8080</code> or another HTTP(S) host instead.
+      </p>
+      <pre class="log compact">cd ssap-install-bridge
+python3 -m http.server 8080</pre>
+      <p class="small muted">
+        Then open in the browser: <code>http://localhost:8080/docs/</code>
+      </p>
+    </section>
+
+    <section class="card">
+      <h1>webOS SSAP Install Bridge</h1>
+      <p class="muted">
+        Browser-based installer companion for LG webOS TVs. This view focuses on connection health,
+        a small visual check, and a guided IPK delivery flow. On HTTPS pages, the app automatically prefers
+        <code>wss://&lt;TV-IP&gt;:3001</code>.
+      </p>
+    </section>
+
+    <div class="grid grid-2">
+      <section class="card">
+        <h2>Connection</h2>
+        <div class="grid grid-2">
+          <div>
+            <label for="tvIp">TV IP</label>
+            <input id="tvIp" class="code" placeholder="192.168.1.50" />
+          </div>
+          <div>
+            <label for="port">Port</label>
+            <select id="port">
+              <option value="3000">3000 (ws)</option>
+              <option value="3001">3001 (wss)</option>
+            </select>
+          </div>
+        </div>
+        <div class="row top-gap">
+          <div class="status fit"><span id="statusDot" class="dot"></span><span id="statusText">Disconnected</span></div>
+          <button id="connectBtn" class="primary fit">Connect</button>
+          <button id="disconnectBtn" class="fit">Disconnect</button>
+          <button id="openCertBtn" class="fit">Open Certificate Tab</button>
+          <button id="clearKeyBtn" class="danger fit">Clear Client Key</button>
+        </div>
+        <p class="small muted top-gap">
+          On HTTPS pages, <code>ws://</code> is mixed content and will be blocked. Because of that, the app automatically
+          uses <code>wss://&lt;TV-IP&gt;:3001</code>. The TV certificate must be accepted manually in the browser once.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Quick Check</h2>
+        <div>
+          <label for="testAlertMessage">Prompt Text</label>
+          <input id="testAlertMessage" value="Bridge check" />
+        </div>
+        <div class="top-gap">
+          <label for="testToastMessage">Confirmation Toast</label>
+          <input id="testToastMessage" value="Bridge check complete" />
+        </div>
+        <div class="top-gap">
+          <label for="testPhase">Trigger Phase</label>
+          <select id="testPhase">
+            <option value="onclose">onclose</option>
+            <option value="onfail">onfail</option>
+            <option value="button">button/onclick</option>
+          </select>
+        </div>
+        <div class="row top-gap">
+          <button id="sendToastTestBtn" class="primary fit">Run Quick Check</button>
+          <button id="loadToastTestExampleBtn" class="fit">Load Example</button>
+        </div>
+        <p class="small muted top-gap">
+          This is the fastest visible signal before running the full workflow.
+        </p>
+      </section>
+    </div>
+
+    <div class="grid grid-2">
+      <section class="card">
+        <h2>Install Workflow</h2>
+        <div>
+          <label for="workflowPreset">Workflow Preset</label>
+          <select id="workflowPreset">
+            <option value="devmode">Developer Mode Bootstrap</option>
+            <option value="hbchannel">Homebrew Channel Post-DevMode</option>
+          </select>
+        </div>
+        <div>
+          <label for="workflowUrl">IPK URL</label>
+          <input id="workflowUrl" class="code" value="https://azoffshowy.github.io/ssap-install-bridge/resources/com.palmdts.devmode.ipk" />
+        </div>
+        <div class="top-gap">
+          <label for="workflowAppId">App ID for Install</label>
+          <input id="workflowAppId" class="code" value="com.palmdts.devmode" />
+        </div>
+        <div class="row top-gap">
+          <button id="runWorkflowBtn" class="danger fit">Run Workflow</button>
+          <button id="loadWorkflowExampleBtn" class="fit">Load Example</button>
+        </div>
+        <details class="top-gap">
+          <summary>Advanced Settings</summary>
+          <div class="grid grid-2 top-gap">
+            <div>
+              <label for="workflowTargetDir">Download Target Directory</label>
+              <input id="workflowTargetDir" class="code" value="/media/internal/downloads" />
+            </div>
+            <div>
+              <label for="workflowFilename">Filename</label>
+              <input id="workflowFilename" class="code" value="com.palmdts.devmode.ipk" />
+            </div>
+          </div>
+          <div class="grid grid-2 top-gap">
+            <div>
+              <label for="workflowPhase">Trigger Phase</label>
+              <select id="workflowPhase">
+                <option value="onclose">onclose</option>
+                <option value="onfail">onfail</option>
+                <option value="button">button/onclick</option>
+              </select>
+            </div>
+            <div>
+              <label for="workflowWaitSeconds">Wait Between Steps</label>
+              <input id="workflowWaitSeconds" type="number" min="0" max="120" value="10" />
+            </div>
+          </div>
+          <div class="top-gap">
+            <label for="workflowInstallMode">Install Endpoint</label>
+            <select id="workflowInstallMode">
+              <option value="install">com.webos.appInstallService/install</option>
+              <option value="dev/install">com.webos.appInstallService/dev/install</option>
+            </select>
+          </div>
+          <div class="grid grid-2 top-gap">
+            <div>
+              <label for="workflowDownloadAlertMessage">Alert Text for Download</label>
+                <input id="workflowDownloadAlertMessage" value="Prepare package transfer" />
+            </div>
+            <div>
+              <label for="workflowInstallAlertMessage">Alert Text for Install</label>
+              <input id="workflowInstallAlertMessage" value="Prepare package install" />
+            </div>
+          </div>
+          <div class="top-gap">
+            <label for="workflowLaunchAlertMessage">Alert Text for Launch</label>
+            <input id="workflowLaunchAlertMessage" value="Open installed app" />
+          </div>
+          <div class="top-gap">
+            <label for="workflowInstallPath">Local IPK Path for Install</label>
+            <input id="workflowInstallPath" class="code" readonly value="/media/internal/downloads/com.palmdts.devmode.ipk" />
+          </div>
+        </details>
+        <p class="small muted top-gap">
+          Runs three steps in sequence: download, wait, install, wait, then launch.
+        </p>
+      </section>
+
+      <section class="card">
+        <h2>Workflow Output</h2>
+        <pre id="workflowOutput" class="log compact"></pre>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>Log / Responses</h2>
+      <div class="row">
+        <button id="clearLogBtn" class="fit">Clear Log</button>
+      </div>
+      <pre id="log" class="log"></pre>
+    </section>
+  </div>
+
+  <script>
+    if (window.location.protocol === 'file:') {
+      const notice = document.getElementById('fileProtocolNotice');
+      if (notice) notice.hidden = false;
+    } else {
+      const script = document.createElement('script');
+      script.type = 'module';
+      script.src = './app.js';
+      document.body.appendChild(script);
+    }
+  </script>
+</body>
+</html>
