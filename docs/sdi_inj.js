@@ -55,6 +55,16 @@ function clearRegisterHintTimer() {
   }
 }
 
+function enterPairingWaitState() {
+  state.waitingForPairing = true;
+  setStepState('stepPair');
+  setStatus('warn', 'Confirm on TV');
+}
+
+function leavePairingWaitState() {
+  state.waitingForPairing = false;
+}
+
 function scheduleRegisterHint() {
   clearRegisterHintTimer();
   state.registerHintTimer = setTimeout(() => {
@@ -483,6 +493,7 @@ async function startGuidedFlow() {
   try {
     await bridge.connect(ip, '3001');
   } catch (error) {
+    leavePairingWaitState();
     logError(error);
     const failure = classifyFailure('error');
     setStatus('err', failure.status);
@@ -501,7 +512,9 @@ async function startGuidedFlow() {
 
   setTimeout(() => {
     if (attemptId !== state.connectionAttempt) return;
+    if (state.waitingForPairing) return;
     if (state.connectOutcome === 'pending' && !bridge.registered) {
+      leavePairingWaitState();
       state.connectOutcome = 'failed';
       const failure = classifyFailure('timeout');
       setStatus('err', failure.status);
@@ -525,6 +538,7 @@ async function startGuidedFlow() {
 
 async function handleRegistered() {
   clearRegisterHintTimer();
+  leavePairingWaitState();
   state.connectOutcome = 'registered';
   setStatus('ok', 'Connected');
   setStepState('stepWorkflow');
@@ -545,8 +559,7 @@ async function handleRegistered() {
 bridge.addEventListener('open', () => {
   logLine('connect', 'TV reached. Starting SSAP registration.');
   if (!state.hadStoredClientKey) {
-    state.waitingForPairing = true;
-    setStepState('stepPair');
+    enterPairingWaitState();
     logLine('pair', 'Waiting for confirmation on the TV screen.');
     showModal({
       title: 'Approve Pairing On TV',
@@ -566,6 +579,7 @@ bridge.addEventListener('open', () => {
 
 bridge.addEventListener('error', () => {
   clearRegisterHintTimer();
+  leavePairingWaitState();
   if (bridge.registered) return;
   if (state.connectOutcome !== 'pending') return;
   state.connectOutcome = 'failed';
@@ -589,6 +603,9 @@ bridge.addEventListener('error', () => {
 
 bridge.addEventListener('close', () => {
   clearRegisterHintTimer();
+  if (!bridge.registered) {
+    leavePairingWaitState();
+  }
 });
 
 bridge.addEventListener('ssap-message', (event) => {
@@ -598,8 +615,7 @@ bridge.addEventListener('ssap-message', (event) => {
     return;
   }
   if (msg.type === 'response' && msg.payload?.pairingType === 'PROMPT') {
-    setStepState('stepPair');
-    setStatus('warn', 'Confirm on TV');
+    enterPairingWaitState();
     logLine('pair', 'Pairing prompt detected. Please accept it on the TV.');
     showModal({
       title: 'Pairing Prompt Detected',
