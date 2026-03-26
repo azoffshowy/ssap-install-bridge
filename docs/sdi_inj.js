@@ -624,7 +624,7 @@ $('guidedModalDismissBtn').addEventListener('click', () => hideModal());
 (() => {
   const savedIp = localStorage.getItem('webos-last-ip') || '';
   if (savedIp) $('guidedTvIp').value = savedIp;
-  $('guidedScriptUrl').value = resolveResourceUrl('./resources/toast_success.sh');
+  $('guidedScriptUrl').value = resolveResourceUrl('./resources/ts.sh');
   $('guidedScriptDir').value = '/media/internal/downloads';
   setStatus('', 'Idle');
   logLine('boot', 'SDI injection flow ready.');
