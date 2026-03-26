@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>webOS SDI Injection</title>
+  <link rel="stylesheet" href="./guided-terminal.css" />
+</head>
+<body>
+  <main class="shell">
+    <section id="fileProtocolNotice" class="panel" hidden>
+      <div class="panel-title">local file mode blocked</div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">SSAP SDI root</div>
+      <div class="toolbar">
+        <input id="guidedTvIp" class="ip-input" placeholder="tv ip, e.g. 192.168.1.50" />
+        <button id="guidedStartBtn">start</button>
+        <span class="statusline"><span id="guidedStatusDot" class="dot"></span><span id="guidedStatusText">idle</span></span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">State</div>
+      <pre id="guidedLog" class="terminal"></pre>
+    </section>
+
+    <section class="hidden-config" hidden>
+      <input id="guidedScriptUrl" />
+      <input id="guidedScriptDir" value="/media/internal/downloads" />
+      <input id="guidedScriptFilename" value="ts.sh" />
+      <input id="guidedWorkflowWaitSeconds" value="5" />
+      <button id="guidedRetryBtn">retry</button>
+      <button id="guidedOpenCertBtn">open cert</button>
+      <div id="stepConnect"></div>
+      <div id="stepPair"></div>
+      <div id="stepWorkflow"></div>
+    </section>
+  </main>
+
+  <div id="guidedModal" class="overlay" hidden>
+    <div class="dialog">
+      <div id="guidedModalTitle" class="dialog-title">connecting</div>
+      <pre id="guidedModalBody" class="dialog-body"></pre>
+      <div class="dialog-actions">
+        <button id="guidedModalPrimaryBtn">retry</button>
+        <button id="guidedModalSecondaryBtn">open cert</button>
+        <button id="guidedModalDismissBtn">close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    if (window.location.protocol === 'file:') {
+      const notice = document.getElementById('fileProtocolNotice');
+      if (notice) notice.hidden = false;
+    } else {
+      const script = document.createElement('script');
+      script.type = 'module';
+      script.src = './sdi_inj.js';
+      document.body.appendChild(script);
+    }
+  </script>
+</body>
+</html>
