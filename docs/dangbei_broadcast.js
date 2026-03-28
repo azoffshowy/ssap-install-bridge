@@ -37,6 +37,10 @@ function setStatus(type, text) {
   statusText.textContent = text;
 }
 
+function setInjectReady(ready) {
+  $('dangbeiLaunchBtn').disabled = !ready;
+}
+
 function setStepState(activeStep) {
   const steps = ['stepConnect', 'stepPair', 'stepWorkflow'];
   const activeIndex = steps.indexOf(activeStep);
@@ -192,6 +196,7 @@ class WebOsSsapBridge extends EventTarget {
     if (type === 'close') {
       this.connected = false;
       this.registered = false;
+      setInjectReady(false);
       setStatus('', 'Disconnected');
       return;
     }
@@ -205,6 +210,7 @@ class WebOsSsapBridge extends EventTarget {
         this.dispatchEvent(new CustomEvent('ssap-message', { detail: msg }));
         if (msg.type === 'registered') {
           this.registered = true;
+          setInjectReady(true);
           setStatus('ok', 'Registered');
           const clientKey = msg.payload && msg.payload['client-key'];
           if (clientKey) setStoredClientKey(this.ip, clientKey);
@@ -449,6 +455,7 @@ async function startGuidedFlow() {
   state.hadStoredClientKey = Boolean(getStoredClientKey(ip));
   saveIp(ip);
   bridge.disconnect();
+  setInjectReady(false);
   setStepState('stepConnect');
   setStatus('warn', 'Connecting …');
   logLine('connect', `Trying to reach TV at ${ip} over wss:// on port 3001.`);
@@ -510,6 +517,7 @@ function handleRegistered() {
   clearRegisterHintTimer();
   leavePairingWaitState();
   state.connectOutcome = 'registered';
+  setInjectReady(true);
   setStatus('ok', 'Connected');
   setStepState('stepWorkflow');
   hideModal();
@@ -547,6 +555,7 @@ bridge.addEventListener('error', () => {
   if (bridge.registered) return;
   if (state.connectOutcome !== 'pending') return;
   state.connectOutcome = 'failed';
+  setInjectReady(false);
   const elapsedMs = state.connectStartedAt ? Date.now() - state.connectStartedAt : 0;
   const failure = classifyFailure('error', { elapsedMs });
   setStatus('err', failure.status);
@@ -576,6 +585,7 @@ bridge.addEventListener('error', () => {
 
 bridge.addEventListener('close', () => {
   clearRegisterHintTimer();
+  setInjectReady(false);
   if (!bridge.registered) leavePairingWaitState();
 });
 
@@ -623,6 +633,7 @@ $('dangbeiLaunchBtn').addEventListener('click', async () => {
   if (savedIp) $('guidedTvIp').value = savedIp;
   $('dangbeiAppId').value = 'com.webos.app.dangbei-overlay';
   $('dangbeiTargetUrl').value = resolveResourceUrl('./resources/dangbei_broadcast/');
+  setInjectReady(false);
   setStatus('', 'Idle');
   logLine('boot', 'dangbei broadcast page ready.');
   logLine('boot', 'Connect to the TV, then press launch probe.');
