@@ -87,6 +87,7 @@
     var activeTicket = null;
     var statusSubscriptionStarted = false;
     var broadcastSent = false;
+    var stallTimer = null;
 
     function setStatus(state, detail, note) {
       statusValueEl.textContent = state;
@@ -95,39 +96,21 @@
       statusNoteEl.textContent = note || '';
     }
 
-    function errorMessage(error, fallback) {
-      if (!error) {
-        return fallback || 'unexpected error';
+    function clearStallTimer() {
+      if (stallTimer) {
+        clearTimeout(stallTimer);
+        stallTimer = null;
       }
-      if (typeof error === 'string') {
-        return error || fallback || 'unexpected error';
-      }
-      if (error.message) {
-        return error.message;
-      }
-      return fallback || String(error);
     }
 
-    function payloadSummary(payload) {
-      if (!payload) {
-        return '';
-      }
-      var parts = [];
-      if (payload.errorText) parts.push(payload.errorText);
-      if (typeof payload.httpStatus !== 'undefined') parts.push('HTTP ' + payload.httpStatus);
-      if (typeof payload.completionStatusCode !== 'undefined') parts.push('code ' + payload.completionStatusCode);
-      if (payload.state) parts.push('state ' + payload.state);
-      if (payload.target) parts.push(payload.target);
-      if (payload.url) parts.push(payload.url);
-      if (payload.ticket) parts.push('ticket ' + payload.ticket);
-      if (!parts.length) {
-        try {
-          return JSON.stringify(payload);
-        } catch (_) {
-          return String(payload);
+    function armStallTimer() {
+      clearStallTimer();
+      stallTimer = setTimeout(function () {
+        if (statusValueEl.textContent !== 'pending') {
+          return;
         }
-      }
-      return parts.join(' | ');
+        statusNoteEl.textContent = 'Still waiting for completion. If local HTTP works but remote HTTPS hangs, the TV may be running into TLS or certificate compatibility limits.';
+      }, 15000);
     }
 
     function detailFromPayload(payload, fallback) {
@@ -147,28 +130,6 @@
         return 'ticket ' + payload.ticket;
       }
       return JSON.stringify(payload);
-    }
-
-    function downloadFailureDetail(payload) {
-      if (!payload) {
-        return 'download failed';
-      }
-      if (payload.errorText) {
-        return payload.errorText;
-      }
-      if (payload.aborted === true) {
-        return 'download was aborted';
-      }
-      if (payload.interrupted === true) {
-        return 'download was interrupted';
-      }
-      if (typeof payload.httpStatus !== 'undefined') {
-        return 'download failed (HTTP ' + payload.httpStatus + ')';
-      }
-      if (typeof payload.completionStatusCode !== 'undefined') {
-        return 'download failed (code ' + payload.completionStatusCode + ')';
-      }
-      return 'download failed';
     }
 
     function getScriptPath() {
@@ -200,23 +161,33 @@
     function isSuccessfulDownloadStatus(status) {
       return !!(
         status &&
-        status.returnValue === true &&
         status.completed === true &&
         status.aborted !== true &&
         status.interrupted !== true &&
-        status.state === 'completed' &&
-        status.httpStatus === 200
+        (
+          status.returnValue === true ||
+          typeof status.returnValue === 'undefined'
+        ) &&
+        (
+          status.state === 'completed' ||
+          status.httpStatus === 200 ||
+          status.completionStatusCode === 200
+        )
       );
     }
 
     function isFailedDownloadStatus(status) {
-      if (!status || status.returnValue !== true) {
-        return !!status;
+      if (!status) {
+        return false;
+      }
+      if (status.returnValue === false) {
+        return true;
       }
       return (
         status.aborted === true ||
         status.interrupted === true ||
-        status.completed === false && (
+        (status.completed === false || status.state === 'failed') && (
+          (typeof status.httpStatus !== 'undefined' && status.httpStatus >= 400) ||
           status.completionStatusCode < 0 ||
           status.errorCode ||
           status.errorText
@@ -229,6 +200,7 @@
         return;
       }
       broadcastSent = true;
+      clearStallTimer();
       try {
         var command = buildTriggerCommand(getScriptPath());
         var triggerPayload = buildLegacyBroadcastPayload(command);
@@ -236,7 +208,7 @@
         triggerBridge.onservicecallback = function (payload) {
           var parsed = parsePayload(payload);
           if (parsed && parsed.returnValue === false) {
-            setStatus('failed', 'broadcast call failed', payloadSummary(parsed));
+            setStatus('failed', detailFromPayload(parsed, 'broadcast call failed'));
           }
         };
         setStatus(
@@ -254,7 +226,7 @@
           'Watch for a success toast on the TV.'
         );
       } catch (error) {
-        setStatus('failed', 'broadcast call failed', errorMessage(error, 'broadcast call failed'));
+        setStatus('failed', error.message);
       }
     }
 
@@ -274,7 +246,8 @@
           var parsed = parsePayload(payload);
           if (!parsed || parsed.returnValue === false) {
             settled = true;
-            setStatus('failed', 'download status query failed', payloadSummary(parsed));
+            clearStallTimer();
+            setStatus('failed', detailFromPayload(parsed, 'status query failed'));
             return;
           }
           if (settled) {
@@ -282,13 +255,20 @@
           }
           if (isSuccessfulDownloadStatus(parsed)) {
             settled = true;
+            clearStallTimer();
             setStatus('pending', 'download completed', parsed.target || '');
             callLegacyBroadcast();
             return;
           }
           if (isFailedDownloadStatus(parsed)) {
             settled = true;
-            setStatus('failed', downloadFailureDetail(parsed), payloadSummary(parsed));
+            clearStallTimer();
+            setStatus('failed', parsed.errorText || ('status code: ' + parsed.completionStatusCode));
+            return;
+          }
+          armStallTimer();
+          if (typeof parsed.amountReceived !== 'undefined' && typeof parsed.amountTotal !== 'undefined') {
+            setStatus('pending', 'downloading...', parsed.amountReceived + ' / ' + parsed.amountTotal + ' bytes');
             return;
           }
           setStatus('pending', 'downloading...', parsed.target || parsed.state || '');
@@ -302,7 +282,7 @@
           JSON.stringify(statusPayload)
         );
       } catch (error) {
-        setStatus('failed', 'download status query failed', errorMessage(error, 'download status query failed'));
+        setStatus('failed', error.message);
       }
     }
 
@@ -318,25 +298,28 @@
         bridge.onservicecallback = function (payload) {
           var parsed = parsePayload(payload);
           if (!parsed) {
+            clearStallTimer();
             setStatus('failed', 'download request returned an empty payload');
             return;
           }
           if (parsed.ticket) {
             requestAccepted = true;
             setStatus('pending', 'download accepted', detailFromPayload(parsed, 'waiting for download status'));
+            armStallTimer();
             if (!statusSubscriptionStarted || activeTicket !== parsed.ticket) {
               subscribeToDownloadStatus(parsed.ticket);
             }
             return;
           }
           if (parsed.returnValue === false) {
-            setStatus('failed', 'download request rejected', payloadSummary(parsed));
+            clearStallTimer();
+            setStatus('failed', detailFromPayload(parsed, 'download request failed'));
             return;
           }
           if (!requestAccepted) {
-            setStatus('pending', 'waiting for ticket...', payloadSummary(parsed));
+            setStatus('pending', detailFromPayload(parsed, 'waiting for ticket'));
           } else if (parsed.completed === true || parsed.state || parsed.amountReceived || parsed.amountTotal) {
-            setStatus('pending', 'download in progress...', payloadSummary(parsed));
+            setStatus('pending', detailFromPayload(parsed, 'download in progress'));
           }
         };
         var requestPayload = {
@@ -350,7 +333,8 @@
           JSON.stringify(requestPayload)
         );
       } catch (error) {
-        setStatus('failed', 'download request failed', errorMessage(error, 'download request failed'));
+        clearStallTimer();
+        setStatus('failed', error.message);
       }
     }
 
