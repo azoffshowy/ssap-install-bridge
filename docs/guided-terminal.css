@@ -32,7 +32,8 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
 }
 
@@ -72,12 +73,17 @@ select {
 
 input,
 button,
-select {
+select,
+textarea {
   border: 1px solid var(--border);
   border-radius: 0;
   background: #090d09;
   color: var(--text);
   padding: 10px 12px;
+}
+
+textarea {
+  resize: vertical;
 }
 
 input::placeholder {

