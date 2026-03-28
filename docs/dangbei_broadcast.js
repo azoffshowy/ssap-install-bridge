@@ -5,6 +5,7 @@ const statusDot = $('guidedStatusDot');
 const statusText = $('guidedStatusText');
 
 const CONNECT_TIMEOUT_MS = 7000;
+const CERT_HELP_URL = 'https://help.motorolanetwork.com/kb/general/troubleshooting-connection-isn-t-private-message';
 
 const state = {
   ip: '',
@@ -12,7 +13,8 @@ const state = {
   connectOutcome: 'idle',
   waitingForPairing: false,
   hadStoredClientKey: false,
-  registerHintTimer: null
+  registerHintTimer: null,
+  connectStartedAt: 0
 };
 
 function logLine(kind, data) {
@@ -77,7 +79,8 @@ function scheduleRegisterHint() {
       onPrimary: () => startGuidedFlow(),
       onSecondary: () => openCertificateTab(),
       onDismiss: () => {},
-      hideSecondary: true
+      hideSecondary: true,
+      hideHelp: true
     });
   }, 900);
 }
@@ -300,17 +303,20 @@ class WebOsSsapBridge extends EventTarget {
 
 const bridge = new WebOsSsapBridge();
 
-function showModal({ title, body, primaryLabel = 'Retry', secondaryLabel = 'Open Certificate Tab', dismissLabel = 'Close', onPrimary, onSecondary, onDismiss, hideSecondary = false, hideDismiss = false }) {
+function showModal({ title, body, primaryLabel = 'Retry', secondaryLabel = 'Open Certificate Tab', helpLabel = 'Browser Guide', dismissLabel = 'Close', onPrimary, onSecondary, onHelp, onDismiss, hideSecondary = false, hideHelp = false, hideDismiss = false }) {
   $('guidedModalTitle').textContent = title;
   $('guidedModalBody').textContent = body;
   $('guidedModalPrimaryBtn').textContent = primaryLabel;
   $('guidedModalSecondaryBtn').textContent = secondaryLabel;
+  $('guidedModalHelpBtn').textContent = helpLabel;
   $('guidedModalDismissBtn').textContent = dismissLabel;
   $('guidedModalSecondaryBtn').hidden = hideSecondary;
+  $('guidedModalHelpBtn').hidden = hideHelp;
   $('guidedModalDismissBtn').hidden = hideDismiss;
   $('guidedModal').hidden = false;
   $('guidedModalPrimaryBtn').onclick = () => onPrimary && onPrimary();
   $('guidedModalSecondaryBtn').onclick = () => onSecondary && onSecondary();
+  $('guidedModalHelpBtn').onclick = () => onHelp && onHelp();
   $('guidedModalDismissBtn').onclick = () => {
     if (onDismiss) onDismiss();
     hideModal();
@@ -327,6 +333,11 @@ function openCertificateTab() {
   const certUrl = `https://${ip}:3001/`;
   window.open(certUrl, '_blank', 'noopener,noreferrer');
   logLine('info', `Opened certificate tab: ${certUrl}`);
+}
+
+function openCertificateHelpPage() {
+  window.open(CERT_HELP_URL, '_blank', 'noopener,noreferrer');
+  logLine('info', `Opened browser guide: ${CERT_HELP_URL}`);
 }
 
 function shouldOfferCertificateHelp() {
@@ -390,17 +401,34 @@ function saveIp(value) {
   localStorage.setItem('webos-last-ip', value.trim());
 }
 
-function classifyFailure(reason) {
+function classifyFailure(reason, meta = {}) {
   if (reason === 'timeout') {
     return {
       title: 'TV Not Reachable',
-      body: 'No successful WSS connection was established in time. The TV IP may be wrong, the TV may be offline, or port 3001 may not be reachable on the network.',
+      body: 'No successful WSS connection was established in time. This usually means the TV IP is wrong, the TV is offline, or port 3001 is not reachable on the network.',
       status: 'Unreachable'
     };
   }
+  if (reason === 'error') {
+    const elapsedMs = Number(meta.elapsedMs || 0);
+    if (elapsedMs > 0 && elapsedMs < 1500) {
+      return {
+        title: 'Certificate Likely Blocked',
+        body: 'The WSS connection failed almost immediately. In practice this usually means the browser blocked the TV self-signed certificate. Open the TV certificate page first and allow the connection. If the browser makes the continue option hard to find, use the browser guide.',
+        status: 'Connection failed'
+      };
+    }
+    if (elapsedMs >= 2500) {
+      return {
+        title: 'TV Likely Not Reachable',
+        body: 'The WSS connection failed only after a short wait. This usually points to a wrong TV IP, the TV being offline, or port 3001 not being reachable on the network.',
+        status: 'Unreachable'
+      };
+    }
+  }
   return {
     title: 'WSS Connection Failed',
-    body: 'The TV self-signed certificate has not been trusted yet.',
+    body: 'The WSS connection failed before registration completed. This can be caused by the TV self-signed certificate in the browser, but also by a wrong IP or general network/connectivity problems. If the TV is otherwise reachable, open the TV certificate page first and allow the connection. If the browser makes the continue option hard to find, use the browser guide.',
     status: 'Connection failed'
   };
 }
@@ -416,6 +444,7 @@ async function startGuidedFlow() {
   state.connectOutcome = 'pending';
   state.ip = ip;
   state.waitingForPairing = false;
+  state.connectStartedAt = Date.now();
   clearRegisterHintTimer();
   state.hadStoredClientKey = Boolean(getStoredClientKey(ip));
   saveIp(ip);
@@ -431,7 +460,9 @@ async function startGuidedFlow() {
   } catch (error) {
     leavePairingWaitState();
     logError(error);
-    const failure = classifyFailure('error');
+    const failure = classifyFailure('error', {
+      elapsedMs: state.connectStartedAt ? Date.now() - state.connectStartedAt : 0
+    });
     setStatus('err', failure.status);
     showModal({
       title: failure.title,
@@ -441,6 +472,7 @@ async function startGuidedFlow() {
       dismissLabel: 'Close',
       onPrimary: () => startGuidedFlow(),
       onSecondary: () => openCertificateTab(),
+      onHelp: () => openCertificateHelpPage(),
       hideSecondary: !shouldOfferCertificateHelp()
     });
     return;
@@ -454,7 +486,7 @@ async function startGuidedFlow() {
       state.connectOutcome = 'failed';
       const failure = classifyFailure('timeout');
       setStatus('err', failure.status);
-      logLine('error', 'TV did not answer in time. Check IP, network reachability, or certificate trust.');
+      logLine('error', 'TV did not answer in time. This usually points to a wrong IP or a general network reachability problem.');
       showModal({
         title: failure.title,
         body: failure.body,
@@ -463,7 +495,9 @@ async function startGuidedFlow() {
         dismissLabel: 'Close',
         onPrimary: () => startGuidedFlow(),
         onSecondary: () => openCertificateTab(),
-        hideSecondary: !shouldOfferCertificateHelp()
+        onHelp: () => openCertificateHelpPage(),
+        hideSecondary: true,
+        hideHelp: true
       });
       try {
         bridge.disconnect();
@@ -498,7 +532,8 @@ bridge.addEventListener('open', () => {
       dismissLabel: 'Keep Waiting',
       onPrimary: () => startGuidedFlow(),
       onSecondary: () => openCertificateTab(),
-      onDismiss: () => {}
+      onDismiss: () => {},
+      hideHelp: true
     });
   } else {
     logLine('pair', 'Using stored client key. Waiting for registration result.');
@@ -512,9 +547,17 @@ bridge.addEventListener('error', () => {
   if (bridge.registered) return;
   if (state.connectOutcome !== 'pending') return;
   state.connectOutcome = 'failed';
-  const failure = classifyFailure('error');
+  const elapsedMs = state.connectStartedAt ? Date.now() - state.connectStartedAt : 0;
+  const failure = classifyFailure('error', { elapsedMs });
   setStatus('err', failure.status);
-  logLine('error', 'WSS connection failed. Most likely the TV certificate is not trusted yet, otherwise check IP and network.');
+  logLine(
+    'error',
+    elapsedMs > 0 && elapsedMs < 1500
+      ? 'WSS connection failed very early. This is often the browser blocking the TV self-signed certificate, but it can also still be a wrong IP or a connectivity problem.'
+      : elapsedMs >= 2500
+        ? 'WSS connection failed only after a short wait. This usually points to a wrong IP or general reachability problem.'
+        : 'WSS connection failed before registration completed. This can be caused by the browser blocking the TV self-signed certificate, but also by a wrong IP or network/connectivity problems.'
+  );
   try {
     bridge.disconnect();
   } catch (_) {}
@@ -526,6 +569,7 @@ bridge.addEventListener('error', () => {
     dismissLabel: 'Close',
     onPrimary: () => startGuidedFlow(),
     onSecondary: () => openCertificateTab(),
+    onHelp: () => openCertificateHelpPage(),
     hideSecondary: !shouldOfferCertificateHelp()
   });
 });
@@ -552,7 +596,9 @@ bridge.addEventListener('ssap-message', (event) => {
       dismissLabel: 'Keep Waiting',
       onPrimary: () => startGuidedFlow(),
       onSecondary: () => openCertificateTab(),
-      onDismiss: () => {}
+      onDismiss: () => {},
+      hideSecondary: true,
+      hideHelp: true
     });
   }
 });
@@ -560,6 +606,7 @@ bridge.addEventListener('ssap-message', (event) => {
 $('guidedStartBtn').addEventListener('click', () => startGuidedFlow());
 $('guidedRetryBtn').addEventListener('click', () => startGuidedFlow());
 $('guidedOpenCertBtn').addEventListener('click', () => openCertificateTab());
+$('guidedCertHelpBtn').addEventListener('click', () => openCertificateHelpPage());
 $('guidedTvIp').addEventListener('change', () => saveIp($('guidedTvIp').value));
 $('guidedTvIp').addEventListener('keyup', () => saveIp($('guidedTvIp').value));
 $('guidedModalDismissBtn').addEventListener('click', () => hideModal());
